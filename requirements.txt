@@ -1,4 +1,4 @@
-# SWARM Intelligence Discord Bot Dependencies
+# SWARM Intelligence Discord Bot Dependencies - Lite Version
 
 # Discord
 discord.py==2.3.2
@@ -12,30 +12,10 @@ yfinance==0.2.33
 pandas==2.1.4
 numpy==1.26.2
 
-# SEC Edgar
-sec-edgar-downloader==5.0.3
-
-# NLP (for CHIRP integration)
-sentence-transformers==2.2.2
-sumy==0.11.0
-
-# API clients
-requests==2.31.0
-
 # Utilities
 python-dotenv==1.0.0
-pytz==2023.3
-
-# Optional: Financial data
-# financialmodelingprep==0.1.7  # Uncomment if using FMP
+requests==2.31.0
 
 # Web scraping (for Finviz)
 beautifulsoup4==4.12.2
 lxml==4.9.3
-
-# Logging
-colorlog==6.8.0
-
-# Testing
-pytest==7.4.3
-pytest-asyncio==0.21.1
