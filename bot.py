@@ -318,15 +318,15 @@ async def score_command(interaction: discord.Interaction, ticker: str):
         scorer = SwarmScore()
         score_data = scorer.calculate_swarm_score(ticker)
         
-        message = f"""🎯 SWARM SCORE for {ticker}: {score_data['score']}/100
+        message = f"""🎯 SWARM SCORE for {ticker}: {score_data['total_score']}/100
 
 Breakdown:
-├─ SEC Signal: {score_data.get('sec_score', 0)}/35
-├─ Technical: {score_data.get('technical_score', 0)}/35
-├─ Financial: {score_data.get('financial_score', 0)}/15
-└─ News: {score_data.get('news_score', 0)}/10
+├─ SEC Signal: {score_data['breakdown']['sec']['score']}/40
+├─ Technical: {score_data['breakdown']['technical']['score']}/35
+├─ Financial: {score_data['breakdown']['financial']['score']}/15
+└─ News: {score_data['breakdown']['news']['score']}/10
 
-Confidence: {score_data.get('confidence', 'Unknown')}"""
+Confidence: {score_data['confidence']}"""
         
         await interaction.followup.send(message)
         
