@@ -11,7 +11,7 @@ import asyncio
 from datetime import datetime, timedelta
 import json
 from pathlib import Path
-from swarm_score import calculate_swarm_score
+from swarm_score import SwarmScore
 from database import Database, Alert, Ticker
 import logging
 
@@ -315,7 +315,8 @@ async def score_command(interaction: discord.Interaction, ticker: str):
     
     try:
         ticker = ticker.upper().strip()
-        score_data = await calculate_swarm_score(ticker)
+        scorer = SwarmScore()
+        score_data = scorer.calculate_swarm_score(ticker)
         
         message = f"""🎯 SWARM SCORE for {ticker}: {score_data['score']}/100
 
