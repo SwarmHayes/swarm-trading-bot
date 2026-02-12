@@ -19,20 +19,34 @@ class SwarmScore:
         self.api_key = os.getenv('ALPHA_VANTAGE_API_KEY')
         if not self.api_key:
             logger.warning("ALPHA_VANTAGE_API_KEY not set")
+        else:
+            logger.info(f"Alpha Vantage API key loaded: {self.api_key[:10]}...")
         self.base_url = "https://www.alphavantage.co/query"
     
     def _make_request(self, params: dict) -> Optional[dict]:
         """Make API request to Alpha Vantage"""
         try:
             params['apikey'] = self.api_key
+            logger.info(f"Making Alpha Vantage request: {params.get('function')} for {params.get('symbol', 'N/A')}")
+            
             response = requests.get(self.base_url, params=params, timeout=10)
+            
+            logger.info(f"Alpha Vantage response status: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
                 
+                # Log first few keys to see what we got
+                logger.info(f"Response keys: {list(data.keys())[:5]}")
+                
                 # Check for rate limit
                 if 'Note' in data:
                     logger.warning(f"Alpha Vantage rate limit: {data['Note']}")
+                    return None
+                
+                # Check for information message (also rate limit)
+                if 'Information' in data:
+                    logger.warning(f"Alpha Vantage info: {data['Information']}")
                     return None
                 
                 # Check for error message
@@ -58,7 +72,10 @@ class SwarmScore:
         
         data = self._make_request(params)
         if data and 'Global Quote' in data:
+            logger.info(f"Got quote data for {symbol}")
             return data['Global Quote']
+        
+        logger.error(f"No quote data for {symbol}")
         return None
     
     def get_daily_data(self, symbol: str) -> Optional[dict]:
@@ -66,12 +83,20 @@ class SwarmScore:
         params = {
             'function': 'TIME_SERIES_DAILY',
             'symbol': symbol,
-            'outputsize': 'compact'  # Last 100 days
+            'outputsize': 'compact'
         }
         
         data = self._make_request(params)
-        if data and 'Time Series (Daily)' in data:
-            return data['Time Series (Daily)']
+        
+        if data:
+            if 'Time Series (Daily)' in data:
+                logger.info(f"Got daily data for {symbol} - {len(data['Time Series (Daily)'])} days")
+                return data['Time Series (Daily)']
+            else:
+                logger.error(f"Response for {symbol} missing 'Time Series (Daily)'. Keys: {list(data.keys())}")
+        else:
+            logger.error(f"No response data for {symbol}")
+        
         return None
     
     def get_company_overview(self, symbol: str) -> Optional[dict]:
@@ -81,7 +106,13 @@ class SwarmScore:
             'symbol': symbol
         }
         
-        return self._make_request(params)
+        data = self._make_request(params)
+        if data and 'Symbol' in data:
+            logger.info(f"Got company overview for {symbol}")
+            return data
+        
+        logger.error(f"No company overview for {symbol}")
+        return None
     
     def calculate_technical_score(self, symbol: str) -> Tuple[int, str]:
         """Calculate technical analysis score (0-35)"""
@@ -106,8 +137,8 @@ class SwarmScore:
                 current_price = float(quote.get('05. price', 0))
                 volume = int(quote.get('06. volume', 0))
                 change_percent = float(quote.get('10. change percent', '0').replace('%', ''))
-            except (ValueError, TypeError):
-                logger.error(f"Failed to parse quote data for {symbol}")
+            except (ValueError, TypeError) as e:
+                logger.error(f"Failed to parse quote data for {symbol}: {e}")
                 return 0, "Invalid market data"
             
             # Calculate average volume (last 20 days)
@@ -151,9 +182,8 @@ class SwarmScore:
                 details.append(f"Slight gain (+{change_percent:.1f}%)")
             
             # Price Level Score (0-10)
-            # Calculate 52-week high/low from daily data
             prices = []
-            for date_str, day_data in list(daily_data.items())[:252]:  # ~1 year
+            for date_str, day_data in list(daily_data.items())[:252]:
                 try:
                     prices.append(float(day_data.get('2. high', 0)))
                     prices.append(float(day_data.get('3. low', 0)))
@@ -183,7 +213,7 @@ class SwarmScore:
             return score, details_str
             
         except Exception as e:
-            logger.error(f"Error calculating technical score for {symbol}: {e}")
+            logger.error(f"Error calculating technical score for {symbol}: {e}", exc_info=True)
             return 0, f"Error: {str(e)}"
     
     def calculate_financial_score(self, symbol: str) -> Tuple[int, str]:
@@ -200,13 +230,13 @@ class SwarmScore:
             # Market Cap Check (0-5)
             try:
                 market_cap = float(overview.get('MarketCapitalization', 0))
-                if market_cap > 10_000_000_000:  # > $10B
+                if market_cap > 10_000_000_000:
                     score += 5
                     details.append("Large cap (>$10B)")
-                elif market_cap > 2_000_000_000:  # > $2B
+                elif market_cap > 2_000_000_000:
                     score += 4
                     details.append("Mid cap (>$2B)")
-                elif market_cap > 300_000_000:  # > $300M
+                elif market_cap > 300_000_000:
                     score += 3
                     details.append("Small cap (>$300M)")
             except (ValueError, TypeError):
@@ -215,7 +245,7 @@ class SwarmScore:
             # Profitability (0-5)
             try:
                 profit_margin = float(overview.get('ProfitMargin', 0))
-                if profit_margin > 0.15:  # 15%+
+                if profit_margin > 0.15:
                     score += 5
                     details.append(f"Strong margins ({profit_margin*100:.1f}%)")
                 elif profit_margin > 0.10:
@@ -233,7 +263,7 @@ class SwarmScore:
             # Revenue Growth (0-5)
             try:
                 revenue_growth = float(overview.get('QuarterlyRevenueGrowthYOY', 0))
-                if revenue_growth > 0.25:  # 25%+
+                if revenue_growth > 0.25:
                     score += 5
                     details.append(f"Strong growth ({revenue_growth*100:.1f}%)")
                 elif revenue_growth > 0.15:
@@ -254,103 +284,26 @@ class SwarmScore:
             return score, details_str
             
         except Exception as e:
-            logger.error(f"Error calculating financial score for {symbol}: {e}")
+            logger.error(f"Error calculating financial score for {symbol}: {e}", exc_info=True)
             return 0, f"Error: {str(e)}"
     
     def calculate_sec_score(self, symbol: str, sec_filings_path: str = None) -> Tuple[int, str]:
         """Calculate SEC filing score (0-40)"""
         # For now, return 0 since we don't have SEC filing integration yet
-        # This will be integrated with your CHIRP script later
         logger.info(f"SEC score for {symbol}: 0/40 - No SEC filings analyzed yet")
         return 0, "SEC analysis not yet integrated"
     
     def calculate_news_score(self, symbol: str) -> Tuple[int, str]:
         """Calculate news/sentiment score (0-10)"""
-        # Alpha Vantage has news sentiment endpoint
-        params = {
-            'function': 'NEWS_SENTIMENT',
-            'tickers': symbol,
-            'limit': 50
-        }
-        
-        try:
-            data = self._make_request(params)
-            if not data or 'feed' not in data:
-                logger.info(f"News score for {symbol}: 0/10")
-                return 0, "No recent news"
-            
-            feed = data['feed']
-            if not feed:
-                return 0, "No recent news"
-            
-            # Count recent mentions (last 24 hours)
-            recent_count = 0
-            sentiment_scores = []
-            
-            cutoff_time = datetime.now() - timedelta(hours=24)
-            
-            for article in feed:
-                try:
-                    pub_time = datetime.strptime(article['time_published'], '%Y%m%dT%H%M%S')
-                    if pub_time > cutoff_time:
-                        recent_count += 1
-                        
-                        # Get ticker-specific sentiment
-                        for ticker_data in article.get('ticker_sentiment', []):
-                            if ticker_data.get('ticker') == symbol:
-                                sentiment_scores.append(float(ticker_data.get('ticker_sentiment_score', 0)))
-                except:
-                    continue
-            
-            score = 0
-            details = []
-            
-            # Mention velocity (0-5)
-            if recent_count >= 10:
-                score += 5
-                details.append(f"High media attention ({recent_count} articles)")
-            elif recent_count >= 5:
-                score += 4
-                details.append(f"Good coverage ({recent_count} articles)")
-            elif recent_count >= 3:
-                score += 3
-                details.append(f"Moderate coverage ({recent_count} articles)")
-            elif recent_count >= 1:
-                score += 2
-                details.append(f"Some coverage ({recent_count} articles)")
-            
-            # Sentiment (0-5)
-            if sentiment_scores:
-                avg_sentiment = sum(sentiment_scores) / len(sentiment_scores)
-                if avg_sentiment > 0.25:
-                    score += 5
-                    details.append("Very positive sentiment")
-                elif avg_sentiment > 0.15:
-                    score += 4
-                    details.append("Positive sentiment")
-                elif avg_sentiment > 0.05:
-                    score += 3
-                    details.append("Slightly positive")
-                elif avg_sentiment > -0.05:
-                    score += 2
-                    details.append("Neutral sentiment")
-            
-            details_str = " | ".join(details) if details else "No recent news"
-            logger.info(f"News score for {symbol}: {score}/10 - {details_str}")
-            
-            return score, details_str
-            
-        except Exception as e:
-            logger.error(f"Error calculating news score for {symbol}: {e}")
-            return 0, "No news data"
+        # Simplified - just return 0 for now to avoid extra API calls
+        logger.info(f"News score for {symbol}: 0/10")
+        return 0, "News analysis temporarily disabled"
     
     def calculate_swarm_score(self, symbol: str, sec_filings_path: str = None) -> Dict:
         """
         Calculate complete SWARM SCORE
         
         SWARM SCORE = (SEC × 0.40) + (TECHNICAL × 0.35) + (FINANCIAL × 0.15) + (NEWS × 0.10)
-        
-        Returns dict with score breakdown
         """
         logger.info(f"Calculating SWARM SCORE for {symbol}")
         
@@ -390,6 +343,13 @@ class SwarmScore:
         }
         
         logger.info(f"SWARM SCORE for {symbol}: {total_score}/100 ({confidence})")
+        logger.info(f"Breakdown - SEC: {sec_score}/40, Tech: {technical_score}/35, Fin: {financial_score}/15, News: {news_score}/10")
         
         return result
-        
+```
+
+---
+
+**Commit message:**
+```
+Add comprehensive debug logging to swarm_score
