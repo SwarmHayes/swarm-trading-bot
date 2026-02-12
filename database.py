@@ -56,7 +56,7 @@ class Ticker(Base):
     alert_count = Column(Integer, default=0)
     last_alert = Column(DateTime)
     is_active = Column(Boolean, default=True)
-    metadata = Column(JSON)
+    ticker_metadata = Column(JSON)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
