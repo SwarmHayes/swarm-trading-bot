@@ -1,420 +1,395 @@
 """
-SWARM SCORE Calculation Algorithm
-Weights: 40% SEC, 35% Technical, 15% Financial, 10% News
+SWARM Intelligence Score Calculator
+Uses Alpha Vantage API for market data
 """
 
-import yfinance as yf
-import pandas as pd
-from pathlib import Path
 import os
-import re
 import json
+import requests
 from datetime import datetime, timedelta
+from typing import Dict, Optional, Tuple
 import logging
 
-# Weighting configuration
-WEIGHTS = {
-    'sec': 0.40,        # 40 points max
-    'technical': 0.35,  # 35 points max
-    'financial': 0.15,  # 15 points max
-    'news': 0.10,       # 10 points max
-}
+logger = logging.getLogger(__name__)
 
-# SEC Filing keywords and their scores
-SEC_KEYWORDS = {
-    'merger': 10,
-    'acquisition': 10,
-    'strategic alternatives': 8,
-    'bankruptcy': 10,
-    'chapter 11': 10,
-    'fda approval': 10,
-    'fda': 7,
-    'phase iii': 8,
-    'phase 3': 8,
-    'clinical trial': 5,
-    'offering': 6,
-    'private placement': 5,
-    'share repurchase': 7,
-    'ceo': 3,
-    'cfo': 3,
-    'resignation': 5,
-    'lawsuit': 4,
-    'settlement': 4,
-    'dividend': 3,
-    'stock split': 4,
-}
-
-
-async def calculate_swarm_score(ticker: str) -> dict:
-    """
-    Calculate comprehensive SWARM SCORE for a ticker
+class SwarmScore:
+    """Calculate SWARM SCORE using Alpha Vantage API"""
     
-    Returns dict with:
-    - score: Overall 0-100 score
-    - sec_score: SEC signal component (0-40)
-    - technical_score: Technical component (0-35)
-    - financial_score: Financial health component (0-15)
-    - news_score: News momentum component (0-10)
-    - confidence: Confidence level
-    - breakdown: Detailed scoring breakdown
-    """
+    def __init__(self):
+        self.api_key = os.getenv('ALPHA_VANTAGE_API_KEY')
+        if not self.api_key:
+            logger.warning("ALPHA_VANTAGE_API_KEY not set")
+        self.base_url = "https://www.alphavantage.co/query"
     
-    try:
-        # Calculate each component
-        sec_score = await calculate_sec_score(ticker)
-        technical_score = await calculate_technical_score(ticker)
-        financial_score = await calculate_financial_score(ticker)
-        news_score = await calculate_news_score(ticker)
+    def _make_request(self, params: dict) -> Optional[dict]:
+        """Make API request to Alpha Vantage"""
+        try:
+            params['apikey'] = self.api_key
+            response = requests.get(self.base_url, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Check for rate limit
+                if 'Note' in data:
+                    logger.warning(f"Alpha Vantage rate limit: {data['Note']}")
+                    return None
+                
+                # Check for error message
+                if 'Error Message' in data:
+                    logger.error(f"Alpha Vantage error: {data['Error Message']}")
+                    return None
+                    
+                return data
+            else:
+                logger.error(f"Alpha Vantage request failed: {response.status_code}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Alpha Vantage request exception: {e}")
+            return None
+    
+    def get_quote(self, symbol: str) -> Optional[dict]:
+        """Get real-time quote data"""
+        params = {
+            'function': 'GLOBAL_QUOTE',
+            'symbol': symbol
+        }
         
-        # Calculate total score
-        total_score = sec_score + technical_score + financial_score + news_score
+        data = self._make_request(params)
+        if data and 'Global Quote' in data:
+            return data['Global Quote']
+        return None
+    
+    def get_daily_data(self, symbol: str) -> Optional[dict]:
+        """Get daily time series data"""
+        params = {
+            'function': 'TIME_SERIES_DAILY',
+            'symbol': symbol,
+            'outputsize': 'compact'  # Last 100 days
+        }
+        
+        data = self._make_request(params)
+        if data and 'Time Series (Daily)' in data:
+            return data['Time Series (Daily)']
+        return None
+    
+    def get_company_overview(self, symbol: str) -> Optional[dict]:
+        """Get company fundamental data"""
+        params = {
+            'function': 'OVERVIEW',
+            'symbol': symbol
+        }
+        
+        return self._make_request(params)
+    
+    def calculate_technical_score(self, symbol: str) -> Tuple[int, str]:
+        """Calculate technical analysis score (0-35)"""
+        score = 0
+        details = []
+        
+        try:
+            # Get quote data
+            quote = self.get_quote(symbol)
+            if not quote:
+                logger.error(f"No quote data for {symbol}")
+                return 0, "No market data available"
+            
+            # Get daily data for volume analysis
+            daily_data = self.get_daily_data(symbol)
+            if not daily_data:
+                logger.error(f"No daily data for {symbol}")
+                return 0, "No historical data available"
+            
+            # Extract current metrics
+            try:
+                current_price = float(quote.get('05. price', 0))
+                volume = int(quote.get('06. volume', 0))
+                change_percent = float(quote.get('10. change percent', '0').replace('%', ''))
+            except (ValueError, TypeError):
+                logger.error(f"Failed to parse quote data for {symbol}")
+                return 0, "Invalid market data"
+            
+            # Calculate average volume (last 20 days)
+            volumes = []
+            for date_str, day_data in list(daily_data.items())[:20]:
+                try:
+                    volumes.append(int(day_data.get('5. volume', 0)))
+                except (ValueError, TypeError):
+                    continue
+            
+            avg_volume = sum(volumes) / len(volumes) if volumes else 0
+            
+            # Volume Score (0-15)
+            if avg_volume > 0:
+                volume_ratio = volume / avg_volume
+                if volume_ratio >= 3.0:
+                    score += 15
+                    details.append(f"Volume 3x+ average ({volume_ratio:.1f}x)")
+                elif volume_ratio >= 2.0:
+                    score += 12
+                    details.append(f"Volume 2x average ({volume_ratio:.1f}x)")
+                elif volume_ratio >= 1.5:
+                    score += 8
+                    details.append(f"Volume 1.5x average ({volume_ratio:.1f}x)")
+                elif volume_ratio >= 1.0:
+                    score += 5
+                    details.append(f"Above average volume ({volume_ratio:.1f}x)")
+            
+            # Price Action Score (0-10)
+            if change_percent > 5:
+                score += 10
+                details.append(f"Strong rally (+{change_percent:.1f}%)")
+            elif change_percent > 3:
+                score += 8
+                details.append(f"Good momentum (+{change_percent:.1f}%)")
+            elif change_percent > 1:
+                score += 5
+                details.append(f"Positive movement (+{change_percent:.1f}%)")
+            elif change_percent > 0:
+                score += 3
+                details.append(f"Slight gain (+{change_percent:.1f}%)")
+            
+            # Price Level Score (0-10)
+            # Calculate 52-week high/low from daily data
+            prices = []
+            for date_str, day_data in list(daily_data.items())[:252]:  # ~1 year
+                try:
+                    prices.append(float(day_data.get('2. high', 0)))
+                    prices.append(float(day_data.get('3. low', 0)))
+                except (ValueError, TypeError):
+                    continue
+            
+            if prices:
+                week_52_high = max(prices)
+                week_52_low = min(prices)
+                
+                if week_52_high > week_52_low:
+                    pct_from_high = ((week_52_high - current_price) / week_52_high) * 100
+                    
+                    if pct_from_high < 5:
+                        score += 10
+                        details.append(f"Near 52-week high (-{pct_from_high:.1f}%)")
+                    elif pct_from_high < 10:
+                        score += 7
+                        details.append(f"Strong price level (-{pct_from_high:.1f}% from high)")
+                    elif pct_from_high < 20:
+                        score += 5
+                        details.append(f"Decent price level (-{pct_from_high:.1f}% from high)")
+            
+            details_str = " | ".join(details) if details else "Limited data"
+            logger.info(f"Technical score for {symbol}: {score}/35 - {details_str}")
+            
+            return score, details_str
+            
+        except Exception as e:
+            logger.error(f"Error calculating technical score for {symbol}: {e}")
+            return 0, f"Error: {str(e)}"
+    
+    def calculate_financial_score(self, symbol: str) -> Tuple[int, str]:
+        """Calculate financial health score (0-15)"""
+        score = 0
+        details = []
+        
+        try:
+            overview = self.get_company_overview(symbol)
+            if not overview:
+                logger.error(f"No company overview for {symbol}")
+                return 0, "No financial data available"
+            
+            # Market Cap Check (0-5)
+            try:
+                market_cap = float(overview.get('MarketCapitalization', 0))
+                if market_cap > 10_000_000_000:  # > $10B
+                    score += 5
+                    details.append("Large cap (>$10B)")
+                elif market_cap > 2_000_000_000:  # > $2B
+                    score += 4
+                    details.append("Mid cap (>$2B)")
+                elif market_cap > 300_000_000:  # > $300M
+                    score += 3
+                    details.append("Small cap (>$300M)")
+            except (ValueError, TypeError):
+                pass
+            
+            # Profitability (0-5)
+            try:
+                profit_margin = float(overview.get('ProfitMargin', 0))
+                if profit_margin > 0.15:  # 15%+
+                    score += 5
+                    details.append(f"Strong margins ({profit_margin*100:.1f}%)")
+                elif profit_margin > 0.10:
+                    score += 4
+                    details.append(f"Good margins ({profit_margin*100:.1f}%)")
+                elif profit_margin > 0.05:
+                    score += 3
+                    details.append(f"Positive margins ({profit_margin*100:.1f}%)")
+                elif profit_margin > 0:
+                    score += 2
+                    details.append(f"Profitable ({profit_margin*100:.1f}%)")
+            except (ValueError, TypeError):
+                pass
+            
+            # Revenue Growth (0-5)
+            try:
+                revenue_growth = float(overview.get('QuarterlyRevenueGrowthYOY', 0))
+                if revenue_growth > 0.25:  # 25%+
+                    score += 5
+                    details.append(f"Strong growth ({revenue_growth*100:.1f}%)")
+                elif revenue_growth > 0.15:
+                    score += 4
+                    details.append(f"Good growth ({revenue_growth*100:.1f}%)")
+                elif revenue_growth > 0.05:
+                    score += 3
+                    details.append(f"Growing ({revenue_growth*100:.1f}%)")
+                elif revenue_growth > 0:
+                    score += 2
+                    details.append(f"Slight growth ({revenue_growth*100:.1f}%)")
+            except (ValueError, TypeError):
+                pass
+            
+            details_str = " | ".join(details) if details else "Limited financial data"
+            logger.info(f"Financial score for {symbol}: {score}/15 - {details_str}")
+            
+            return score, details_str
+            
+        except Exception as e:
+            logger.error(f"Error calculating financial score for {symbol}: {e}")
+            return 0, f"Error: {str(e)}"
+    
+    def calculate_sec_score(self, symbol: str, sec_filings_path: str = None) -> Tuple[int, str]:
+        """Calculate SEC filing score (0-40)"""
+        # For now, return 0 since we don't have SEC filing integration yet
+        # This will be integrated with your CHIRP script later
+        logger.info(f"SEC score for {symbol}: 0/40 - No SEC filings analyzed yet")
+        return 0, "SEC analysis not yet integrated"
+    
+    def calculate_news_score(self, symbol: str) -> Tuple[int, str]:
+        """Calculate news/sentiment score (0-10)"""
+        # Alpha Vantage has news sentiment endpoint
+        params = {
+            'function': 'NEWS_SENTIMENT',
+            'tickers': symbol,
+            'limit': 50
+        }
+        
+        try:
+            data = self._make_request(params)
+            if not data or 'feed' not in data:
+                logger.info(f"News score for {symbol}: 0/10")
+                return 0, "No recent news"
+            
+            feed = data['feed']
+            if not feed:
+                return 0, "No recent news"
+            
+            # Count recent mentions (last 24 hours)
+            recent_count = 0
+            sentiment_scores = []
+            
+            cutoff_time = datetime.now() - timedelta(hours=24)
+            
+            for article in feed:
+                try:
+                    pub_time = datetime.strptime(article['time_published'], '%Y%m%dT%H%M%S')
+                    if pub_time > cutoff_time:
+                        recent_count += 1
+                        
+                        # Get ticker-specific sentiment
+                        for ticker_data in article.get('ticker_sentiment', []):
+                            if ticker_data.get('ticker') == symbol:
+                                sentiment_scores.append(float(ticker_data.get('ticker_sentiment_score', 0)))
+                except:
+                    continue
+            
+            score = 0
+            details = []
+            
+            # Mention velocity (0-5)
+            if recent_count >= 10:
+                score += 5
+                details.append(f"High media attention ({recent_count} articles)")
+            elif recent_count >= 5:
+                score += 4
+                details.append(f"Good coverage ({recent_count} articles)")
+            elif recent_count >= 3:
+                score += 3
+                details.append(f"Moderate coverage ({recent_count} articles)")
+            elif recent_count >= 1:
+                score += 2
+                details.append(f"Some coverage ({recent_count} articles)")
+            
+            # Sentiment (0-5)
+            if sentiment_scores:
+                avg_sentiment = sum(sentiment_scores) / len(sentiment_scores)
+                if avg_sentiment > 0.25:
+                    score += 5
+                    details.append("Very positive sentiment")
+                elif avg_sentiment > 0.15:
+                    score += 4
+                    details.append("Positive sentiment")
+                elif avg_sentiment > 0.05:
+                    score += 3
+                    details.append("Slightly positive")
+                elif avg_sentiment > -0.05:
+                    score += 2
+                    details.append("Neutral sentiment")
+            
+            details_str = " | ".join(details) if details else "No recent news"
+            logger.info(f"News score for {symbol}: {score}/10 - {details_str}")
+            
+            return score, details_str
+            
+        except Exception as e:
+            logger.error(f"Error calculating news score for {symbol}: {e}")
+            return 0, "No news data"
+    
+    def calculate_swarm_score(self, symbol: str, sec_filings_path: str = None) -> Dict:
+        """
+        Calculate complete SWARM SCORE
+        
+        SWARM SCORE = (SEC × 0.40) + (TECHNICAL × 0.35) + (FINANCIAL × 0.15) + (NEWS × 0.10)
+        
+        Returns dict with score breakdown
+        """
+        logger.info(f"Calculating SWARM SCORE for {symbol}")
+        
+        # Calculate component scores
+        sec_score, sec_details = self.calculate_sec_score(symbol, sec_filings_path)
+        technical_score, technical_details = self.calculate_technical_score(symbol)
+        financial_score, financial_details = self.calculate_financial_score(symbol)
+        news_score, news_details = self.calculate_news_score(symbol)
+        
+        # Calculate weighted total
+        total_score = int(
+            (sec_score * 0.40) +
+            (technical_score * 0.35) +
+            (financial_score * 0.15) +
+            (news_score * 0.10)
+        )
         
         # Determine confidence level
-        confidence = get_confidence_level(total_score, sec_score, technical_score)
+        if total_score >= 75:
+            confidence = "HIGH"
+        elif total_score >= 60:
+            confidence = "MODERATE"
+        else:
+            confidence = "LOW"
         
-        return {
-            'score': int(total_score),
-            'sec_score': int(sec_score),
-            'technical_score': int(technical_score),
-            'financial_score': int(financial_score),
-            'news_score': int(news_score),
+        result = {
+            'symbol': symbol,
+            'total_score': total_score,
             'confidence': confidence,
             'breakdown': {
-                'sec': get_sec_breakdown(ticker),
-                'technical': get_technical_breakdown(ticker),
-                'financial': get_financial_breakdown(ticker),
-            }
+                'sec': {'score': sec_score, 'max': 40, 'details': sec_details},
+                'technical': {'score': technical_score, 'max': 35, 'details': technical_details},
+                'financial': {'score': financial_score, 'max': 15, 'details': financial_details},
+                'news': {'score': news_score, 'max': 10, 'details': news_details}
+            },
+            'timestamp': datetime.now().isoformat()
         }
         
-    except Exception as e:
-        logging.error(f'Error calculating SWARM SCORE for {ticker}: {e}')
-        return {
-            'score': 0,
-            'sec_score': 0,
-            'technical_score': 0,
-            'financial_score': 0,
-            'news_score': 0,
-            'confidence': 'Unknown',
-            'breakdown': {}
-        }
-
-
-async def calculate_sec_score(ticker: str) -> float:
-    """
-    Calculate SEC Signal Score (0-40 points)
-    
-    Based on:
-    - Recent SEC filings (8-K, 10-K, 10-Q, S-1)
-    - Keyword detection in filings
-    - Filing timing (premarket bonus)
-    - Historical pattern matching
-    """
-    
-    score = 0
-    max_score = 40
-    
-    try:
-        # Check for recent SEC filings
-        filings_path = Path.home() / 'SEC' / 'Swarm' / 'Nest' / 'sec_filings' / 'sec-edgar-filings' / ticker
+        logger.info(f"SWARM SCORE for {symbol}: {total_score}/100 ({confidence})")
         
-        if not filings_path.exists():
-            return 0
+        return result
         
-        # Find most recent filing
-        recent_filing = find_recent_filing(filings_path)
-        
-        if not recent_filing:
-            return 0
-        
-        # Read filing content
-        with open(recent_filing, 'r', encoding='utf-8', errors='ignore') as f:
-            content = f.read().lower()
-        
-        # Score based on keywords
-        keyword_score = 0
-        matched_keywords = []
-        
-        for keyword, points in SEC_KEYWORDS.items():
-            if keyword.lower() in content:
-                keyword_score += points
-                matched_keywords.append(keyword)
-        
-        # Normalize keyword score to 0-30 range
-        if keyword_score > 0:
-            score += min(30, keyword_score)
-        
-        # Bonus for 8-K filing (usually more significant)
-        if '8-K' in str(recent_filing) or '8-k' in str(recent_filing):
-            score += 5
-        
-        # Bonus for filing timing (if filed in last 24 hours)
-        file_age = datetime.now() - datetime.fromtimestamp(recent_filing.stat().st_mtime)
-        if file_age < timedelta(hours=24):
-            score += 5
-        
-        # Cap at max score
-        score = min(score, max_score)
-        
-        logging.info(f'SEC score for {ticker}: {score}/40 (keywords: {matched_keywords})')
-        return score
-        
-    except Exception as e:
-        logging.error(f'Error calculating SEC score for {ticker}: {e}')
-        return 0
-
-
-async def calculate_technical_score(ticker: str) -> float:
-    """
-    Calculate Technical Score (0-35 points)
-    
-    Based on:
-    - Price action (breakout, support/resistance)
-    - Volume expansion
-    - RSI levels
-    - Moving averages
-    """
-    
-    score = 0
-    max_score = 35
-    
-    try:
-        # Get price data
-        stock = yf.Ticker(ticker)
-        hist = stock.history(period='2mo')
-        
-        if hist.empty:
-            return 0
-        
-        current_price = hist['Close'].iloc[-1]
-        current_volume = hist['Volume'].iloc[-1]
-        
-        # Volume score (0-15 points)
-        avg_volume = hist['Volume'].tail(20).mean()
-        volume_ratio = current_volume / avg_volume if avg_volume > 0 else 0
-        
-        if volume_ratio > 3.0:
-            score += 15
-        elif volume_ratio > 2.0:
-            score += 12
-        elif volume_ratio > 1.5:
-            score += 8
-        elif volume_ratio > 1.2:
-            score += 5
-        
-        # RSI score (0-10 points)
-        rsi = calculate_rsi(hist['Close'])
-        if rsi:
-            if 40 <= rsi <= 60:  # Goldilocks zone
-                score += 10
-            elif 30 <= rsi <= 70:
-                score += 7
-            elif rsi < 30:  # Oversold
-                score += 5
-            else:  # Overbought
-                score += 2
-        
-        # Price action score (0-10 points)
-        # Check for breakout above 52-week high
-        high_52w = hist['High'].max()
-        if current_price >= high_52w * 0.98:  # Within 2% of 52W high
-            score += 10
-        elif current_price >= high_52w * 0.95:  # Within 5%
-            score += 7
-        
-        # Check 50-day SMA
-        if len(hist) >= 50:
-            sma50 = hist['Close'].tail(50).mean()
-            if current_price > sma50 * 1.10:  # 10% above SMA50
-                score += 5
-        
-        score = min(score, max_score)
-        
-        logging.info(f'Technical score for {ticker}: {score}/35 (vol: {volume_ratio:.1f}x, RSI: {rsi})')
-        return score
-        
-    except Exception as e:
-        logging.error(f'Error calculating technical score for {ticker}: {e}')
-        return 0
-
-
-async def calculate_financial_score(ticker: str) -> float:
-    """
-    Calculate Financial Health Score (0-15 points)
-    
-    Based on:
-    - Cash vs Debt ratio
-    - Balance sheet health
-    - Your existing 1-4 star rating system
-    """
-    
-    score = 0
-    max_score = 15
-    
-    try:
-        # Try to read from your existing financial health analysis
-        # This would integrate with your check_financial_health.py output
-        
-        # For now, use basic yfinance data
-        stock = yf.Ticker(ticker)
-        info = stock.info
-        
-        # Get cash and debt
-        cash = info.get('totalCash', 0)
-        debt = info.get('totalDebt', 0)
-        
-        if cash > 0 and debt >= 0:
-            # Calculate debt-to-equity or cash-to-debt ratio
-            if debt == 0:
-                score = 15  # No debt = excellent
-            else:
-                ratio = cash / debt
-                if ratio > 2.0:  # Cash > 2x debt
-                    score = 15
-                elif ratio > 1.0:  # Cash > debt
-                    score = 12
-                elif ratio > 0.5:  # Cash > 50% of debt
-                    score = 8
-                else:
-                    score = 4
-        
-        # Alternative: map your 1-4 star rating
-        # If you have a rating file, read it here
-        # rating = get_financial_rating(ticker)
-        # score = rating * 3.75  # 4 stars = 15 points
-        
-        logging.info(f'Financial score for {ticker}: {score}/15')
-        return score
-        
-    except Exception as e:
-        logging.error(f'Error calculating financial score for {ticker}: {e}')
-        return 0
-
-
-async def calculate_news_score(ticker: str) -> float:
-    """
-    Calculate News Momentum Score (0-10 points)
-    
-    Based on:
-    - Number of recent mentions
-    - News sentiment
-    - Social media activity
-    """
-    
-    score = 0
-    max_score = 10
-    
-    try:
-        # This would integrate with your Benzinga/PR monitor
-        # For now, basic implementation
-        
-        # Check if ticker appears in recent news feeds
-        # Check Benzinga output
-        benzinga_file = Path.home() / 'SEC' / 'Swarm' / 'Nest' / 'benzinga_feed.json'
-        if benzinga_file.exists():
-            with open(benzinga_file, 'r') as f:
-                benzinga_data = json.load(f)
-            
-            if ticker in benzinga_data:
-                # Score based on urgency from benzinga
-                urgency = benzinga_data[ticker].get('urgency', 0)
-                score = min(urgency * 3, max_score)  # Scale urgency to 0-10
-        
-        logging.info(f'News score for {ticker}: {score}/10')
-        return score
-        
-    except Exception as e:
-        logging.error(f'Error calculating news score for {ticker}: {e}')
-        return 0
-
-
-def calculate_rsi(prices, periods=14):
-    """Calculate RSI indicator"""
-    try:
-        delta = prices.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=periods).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=periods).mean()
-        
-        if loss.iloc[-1] == 0:
-            return None
-        
-        rs = gain / loss
-        rsi = 100 - (100 / (1 + rs.iloc[-1]))
-        return rsi
-    except:
-        return None
-
-
-def find_recent_filing(ticker_path: Path) -> Path:
-    """Find most recent SEC filing for a ticker"""
-    try:
-        all_files = []
-        
-        for filing_type in ['8-K', '10-K', '10-Q', 'S-1']:
-            filing_path = ticker_path / filing_type
-            if filing_path.exists():
-                for file in filing_path.rglob('*.txt'):
-                    all_files.append(file)
-        
-        if not all_files:
-            return None
-        
-        # Sort by modification time, return most recent
-        all_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-        return all_files[0]
-        
-    except Exception as e:
-        logging.error(f'Error finding recent filing: {e}')
-        return None
-
-
-def get_confidence_level(score, sec_score, technical_score) -> str:
-    """Determine confidence level based on score and components"""
-    
-    if score >= 90:
-        return "VERY HIGH"
-    elif score >= 80:
-        if sec_score >= 30 and technical_score >= 25:
-            return "HIGH"
-        return "MODERATE-HIGH"
-    elif score >= 70:
-        return "MODERATE"
-    elif score >= 60:
-        return "LOW-MODERATE"
-    else:
-        return "LOW"
-
-
-def get_sec_breakdown(ticker: str) -> dict:
-    """Get detailed SEC component breakdown"""
-    # Placeholder - would return detailed SEC analysis
-    return {}
-
-
-def get_technical_breakdown(ticker: str) -> dict:
-    """Get detailed technical component breakdown"""
-    # Placeholder - would return detailed technical analysis
-    return {}
-
-
-def get_financial_breakdown(ticker: str) -> dict:
-    """Get detailed financial component breakdown"""
-    # Placeholder - would return detailed financial analysis
-    return {}
-
-
-if __name__ == "__main__":
-    # Test the scoring system
-    import asyncio
-    
-    async def test():
-        ticker = "NVDA"
-        result = await calculate_swarm_score(ticker)
-        print(f"\nSWARM SCORE for {ticker}:")
-        print(f"Total: {result['score']}/100")
-        print(f"  SEC: {result['sec_score']}/40")
-        print(f"  Technical: {result['technical_score']}/35")
-        print(f"  Financial: {result['financial_score']}/15")
-        print(f"  News: {result['news_score']}/10")
-        print(f"Confidence: {result['confidence']}")
-    
-    asyncio.run(test())
