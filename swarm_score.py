@@ -346,10 +346,4 @@ class SwarmScore:
         logger.info(f"Breakdown - SEC: {sec_score}/40, Tech: {technical_score}/35, Fin: {financial_score}/15, News: {news_score}/10")
         
         return result
-```
-
----
-
-**Commit message:**
-```
-Add comprehensive debug logging to swarm_score
+        
