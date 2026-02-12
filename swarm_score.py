@@ -310,12 +310,12 @@ class SwarmScore:
         
         # Calculate component scores
         sec_score, sec_details = self.calculate_sec_score(symbol, sec_filings_path)
-time.sleep(1.5)  # Rate limit: 1 req/sec
-technical_score, technical_details = self.calculate_technical_score(symbol)
-time.sleep(1.5)  # Rate limit: 1 req/sec
-financial_score, financial_details = self.calculate_financial_score(symbol)
-time.sleep(1.5)  # Rate limit: 1 req/sec
-news_score, news_details = self.calculate_news_score(symbol)
+        time.sleep(1.5)  # Rate limit: 1 req/sec
+        technical_score, technical_details = self.calculate_technical_score(symbol)
+        time.sleep(1.5)  # Rate limit: 1 req/sec
+        financial_score, financial_details = self.calculate_financial_score(symbol)
+        time.sleep(1.5)  # Rate limit: 1 req/sec
+        news_score, news_details = self.calculate_news_score(symbol)
         
         # Calculate weighted total
         total_score = int(
@@ -350,4 +350,3 @@ news_score, news_details = self.calculate_news_score(symbol)
         logger.info(f"Breakdown - SEC: {sec_score}/40, Tech: {technical_score}/35, Fin: {financial_score}/15, News: {news_score}/10")
         
         return result
-        
