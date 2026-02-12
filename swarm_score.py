@@ -54,8 +54,10 @@ class SwarmScore:
                 if 'Error Message' in data:
                     logger.error(f"Alpha Vantage error: {data['Error Message']}")
                     return None
-                    
+
+                time.sleep(1.2)  # Rate limit: 1 req/sec
                 return data
+                    
             else:
                 logger.error(f"Alpha Vantage request failed: {response.status_code}")
                 return None
